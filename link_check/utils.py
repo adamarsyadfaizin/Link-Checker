@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 try:
     import requests
@@ -107,22 +108,36 @@ def check_redirect(url):
 
 
 def fetch_url_text(url, max_chars=300000):
-    if requests is None:
-        return None
-
     try:
-        response = requests.get(
+        if requests is not None:
+            response = requests.get(
+                _ensure_scheme(url),
+                timeout=8,
+                allow_redirects=True,
+                headers={"User-Agent": "link-check/0.1"},
+            )
+            content_type = response.headers.get("content-type", "").lower()
+            if content_type and not any(
+                kind in content_type
+                for kind in ("text/", "html", "json", "xml", "javascript")
+            ):
+                return None
+            return response.text[:max_chars]
+
+        request = Request(
             _ensure_scheme(url),
-            timeout=8,
-            allow_redirects=True,
             headers={"User-Agent": "link-check/0.1"},
         )
-        content_type = response.headers.get("content-type", "").lower()
+        with urlopen(request, timeout=8) as response:
+            content_type = response.headers.get("content-type", "").lower()
+            charset = response.headers.get_content_charset() or "utf-8"
+            data = response.read(max_chars)
+
         if content_type and not any(
             kind in content_type
             for kind in ("text/", "html", "json", "xml", "javascript")
         ):
             return None
-        return response.text[:max_chars]
+        return data.decode(charset, errors="replace")
     except Exception:
         return None

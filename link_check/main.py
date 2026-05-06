@@ -83,7 +83,12 @@ def _signal_color(reason):
         or reason.startswith("Social engineering:")
     ):
         return RED
-    if reason.startswith("Suspicious TLD") or reason == "Multiple redirects detected":
+    if (
+        reason.startswith("Suspicious TLD")
+        or reason == "Multiple redirects detected"
+        or reason.startswith("Content scan unavailable")
+        or reason == "Shared link includes ad/tracking parameters"
+    ):
         return YELLOW
     return MAGENTA
 
@@ -158,6 +163,16 @@ def _explain_reason(reason):
         return (
             "Attackers often pair high-risk commands with calming safety claims. "
             "The command behavior matters more than the reassurance."
+        )
+    if reason.startswith("Content scan unavailable for shared page"):
+        return (
+            "This is a user-shared page from a trusted platform. The domain is legitimate, "
+            "but the tool could not inspect the shared content, so it cannot clear it as safe."
+        )
+    if reason == "Shared link includes ad/tracking parameters":
+        return (
+            "Tracking parameters do not prove danger, but they are common in promoted links "
+            "and make the source/context harder to trust."
         )
     if reason == "Could not extract domain":
         return "The URL could not be parsed into a registered domain for reliable checks."

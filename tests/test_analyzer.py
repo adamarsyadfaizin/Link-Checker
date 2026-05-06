@@ -91,6 +91,24 @@ class AnalyzerTests(unittest.TestCase):
             result["reasons"],
         )
 
+    def test_shared_page_without_fetch_is_not_marked_safe(self):
+        url = (
+            "https://claude.ai/share/68af1731-48eb-476b-acc6-bcf8a4f99326"
+            "?gad_source=1&gclid=test"
+        )
+
+        with patch("link_check.analyzer.get_domain_age", return_value=None), patch(
+            "link_check.analyzer.check_redirect", return_value=(False, [])
+        ), patch("link_check.analyzer.fetch_url_text", return_value=None):
+            result = analyze_url(url)
+
+        self.assertGreater(result["score"], 40)
+        self.assertIn(
+            "Content scan unavailable for shared page; social engineering could not be verified",
+            result["reasons"],
+        )
+        self.assertIn("Shared link includes ad/tracking parameters", result["reasons"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 import base64
 import binascii
 import re
+from urllib.parse import parse_qs, urlparse
 
 try:
     from Levenshtein import distance
@@ -41,6 +42,23 @@ OFFICIAL_MENTIONS = {
     "openai": "openai.com",
     "google": "google.com",
     "github": "github.com",
+}
+USER_GENERATED_SHARE_PATHS = {
+    "claude.ai": ("/share/",),
+    "chatgpt.com": ("/share/", "/c/"),
+    "poe.com": ("/s/",),
+}
+TRACKING_PARAMS = {
+    "fbclid",
+    "gad_campaignid",
+    "gad_source",
+    "gbraid",
+    "gclid",
+    "igshid",
+    "mc_cid",
+    "utm_campaign",
+    "utm_medium",
+    "utm_source",
 }
 
 
@@ -83,6 +101,19 @@ def _extract_urls(text):
 
 def _is_legit_domain(domain):
     return domain in LEGIT_DOMAINS or any(domain.endswith(f".{legit}") for legit in LEGIT_DOMAINS)
+
+
+def _is_user_generated_share_url(url, domain):
+    paths = USER_GENERATED_SHARE_PATHS.get(domain, ())
+    if not paths:
+        return False
+    path = urlparse(url).path.lower()
+    return any(path.startswith(prefix) for prefix in paths)
+
+
+def _has_tracking_params(url):
+    params = set(parse_qs(urlparse(url).query))
+    return bool(params & TRACKING_PARAMS)
 
 
 def analyze_text(text, source_domain=None):
@@ -245,6 +276,15 @@ def analyze_url(url, fetch_content=True):
                 reasons.extend(text_result["reasons"])
                 score += text_result["score"]
             decoded_urls = text_result.get("decoded_urls", [])
+        elif domain and _is_user_generated_share_url(url, domain):
+            reasons.append(
+                "Content scan unavailable for shared page; social engineering could not be verified"
+            )
+            score += 45
+
+            if _has_tracking_params(url):
+                reasons.append("Shared link includes ad/tracking parameters")
+                score += 10
 
     result = {
         "score": min(score, 100),
