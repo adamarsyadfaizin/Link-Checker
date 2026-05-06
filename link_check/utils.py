@@ -104,3 +104,25 @@ def check_redirect(url):
         return False, []
     except Exception:
         return False, []
+
+
+def fetch_url_text(url, max_chars=300000):
+    if requests is None:
+        return None
+
+    try:
+        response = requests.get(
+            _ensure_scheme(url),
+            timeout=8,
+            allow_redirects=True,
+            headers={"User-Agent": "link-check/0.1"},
+        )
+        content_type = response.headers.get("content-type", "").lower()
+        if content_type and not any(
+            kind in content_type
+            for kind in ("text/", "html", "json", "xml", "javascript")
+        ):
+            return None
+        return response.text[:max_chars]
+    except Exception:
+        return None

@@ -3,6 +3,8 @@ from setuptools import find_packages, setup
 setup(
     name="link-check",
     version="0.1",
+    author="Adam",
+    url="https://github.com/adamarsyadfaizin",
     packages=find_packages(),
     install_requires=[
         "requests",

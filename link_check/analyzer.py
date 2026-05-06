@@ -1,3 +1,7 @@
+import base64
+import binascii
+import re
+
 try:
     from Levenshtein import distance
 except ImportError:
@@ -14,7 +18,7 @@ except ImportError:
             previous = current
         return previous[-1]
 
-from .utils import check_redirect, extract_domain, get_domain_age
+from .utils import check_redirect, extract_domain, fetch_url_text, get_domain_age
 
 LEGIT_DOMAINS = [
     "claude.ai",
@@ -25,6 +29,19 @@ LEGIT_DOMAINS = [
 
 RISKY_KEYWORDS = ["free", "login", "secure", "bonus", "verify"]
 RISKY_TLDS = [".top", ".xyz", ".click", ".buzz"]
+URL_PATTERN = re.compile(r"https?://[^\s'\"<>|)]+", re.IGNORECASE)
+BASE64_PATTERN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/=])")
+PIPE_TO_SHELL_PATTERN = re.compile(
+    r"\b(curl|wget)\b[\s\S]{0,240}\|[\s\S]{0,80}\b(sh|bash|zsh|fish|python|perl|ruby)\b",
+    re.IGNORECASE,
+)
+COMMAND_SUBSTITUTION_PATTERN = re.compile(r"\$\([^)]+\)", re.IGNORECASE)
+OFFICIAL_MENTIONS = {
+    "claude": "claude.ai",
+    "openai": "openai.com",
+    "google": "google.com",
+    "github": "github.com",
+}
 
 
 def check_similarity(domain):
@@ -36,7 +53,141 @@ def check_similarity(domain):
     return None
 
 
-def analyze_url(url):
+def _add_signal(signals, seen, reason, score):
+    if reason in seen:
+        return
+    seen.add(reason)
+    signals.append((reason, score))
+
+
+def _decoded_base64_values(text):
+    decoded = []
+    for token in BASE64_PATTERN.findall(text or ""):
+        padded = token + ("=" * (-len(token) % 4))
+        try:
+            value = base64.b64decode(padded, validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        try:
+            decoded_text = value.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if decoded_text and sum(char.isprintable() for char in decoded_text) / len(decoded_text) > 0.85:
+            decoded.append(decoded_text)
+    return decoded
+
+
+def _extract_urls(text):
+    return [url.rstrip(".,;]") for url in URL_PATTERN.findall(text or "")]
+
+
+def _is_legit_domain(domain):
+    return domain in LEGIT_DOMAINS or any(domain.endswith(f".{legit}") for legit in LEGIT_DOMAINS)
+
+
+def analyze_text(text, source_domain=None):
+    reasons = []
+    seen = set()
+    text = text or ""
+    lowered = text.lower()
+    decoded_values = _decoded_base64_values(text)
+    decoded_text = "\n".join(decoded_values)
+    combined = f"{text}\n{decoded_text}"
+    combined_lowered = combined.lower()
+
+    if PIPE_TO_SHELL_PATTERN.search(combined):
+        _add_signal(
+            reasons,
+            seen,
+            "Social engineering: install command pipes remote script into shell",
+            45,
+        )
+
+    if re.search(r"\bcurl\b[^\n|;]*\s(-k|--insecure)\b", combined, re.IGNORECASE):
+        _add_signal(
+            reasons,
+            seen,
+            "Social engineering: disables TLS verification with curl -k/--insecure",
+            30,
+        )
+
+    if decoded_values and _extract_urls(decoded_text):
+        _add_signal(
+            reasons,
+            seen,
+            "Social engineering: obfuscated base64 payload hides a URL",
+            35,
+        )
+
+    if COMMAND_SUBSTITUTION_PATTERN.search(combined):
+        _add_signal(
+            reasons,
+            seen,
+            "Social engineering: command substitution hides the real command",
+            20,
+        )
+
+    urls = _extract_urls(combined)
+    hidden_domains = []
+    for found_url in urls:
+        found_domain = extract_domain(found_url)
+        if not found_domain:
+            continue
+        if found_url.lower().startswith("http://"):
+            _add_signal(
+                reasons,
+                seen,
+                f"Social engineering: payload URL uses plain HTTP: {found_domain}",
+                25,
+            )
+        if any(tool in combined_lowered for tool in ("curl", "wget")) and not _is_legit_domain(found_domain):
+            hidden_domains.append(found_domain)
+
+    for hidden_domain in sorted(set(hidden_domains)):
+        _add_signal(
+            reasons,
+            seen,
+            f"Social engineering: install command downloads from untrusted domain: {hidden_domain}",
+            35,
+        )
+
+    for mention, official_domain in OFFICIAL_MENTIONS.items():
+        if mention not in lowered:
+            continue
+        for hidden_domain in sorted(set(hidden_domains)):
+            if hidden_domain != official_domain and not hidden_domain.endswith(f".{official_domain}"):
+                _add_signal(
+                    reasons,
+                    seen,
+                    f"Social engineering: mentions {official_domain} but uses different download domain: {hidden_domain}",
+                    30,
+                )
+
+    trust_phrases = (
+        "is it safe",
+        "yes, if you use",
+        "do not run random",
+        "without changing or deleting",
+        "copy the command",
+    )
+    if any(phrase in lowered for phrase in trust_phrases) and (
+        PIPE_TO_SHELL_PATTERN.search(combined) or decoded_values
+    ):
+        _add_signal(
+            reasons,
+            seen,
+            "Social engineering: reassuring language is paired with a risky install command",
+            15,
+        )
+
+    return {
+        "score": min(sum(score for _reason, score in reasons), 100),
+        "reasons": [reason for reason, _score in reasons],
+        "decoded_urls": sorted(set(_extract_urls(decoded_text))),
+    }
+
+
+def analyze_url(url, fetch_content=True):
     domain = extract_domain(url)
 
     reasons = []
@@ -74,6 +225,14 @@ def analyze_url(url):
     if is_redirect:
         reasons.append("Multiple redirects detected")
         score += 15
+
+    if fetch_content:
+        content = fetch_url_text(url)
+        if content:
+            text_result = analyze_text(content, source_domain=domain)
+            if text_result["reasons"]:
+                reasons.extend(text_result["reasons"])
+                score += text_result["score"]
 
     result = {
         "score": min(score, 100),

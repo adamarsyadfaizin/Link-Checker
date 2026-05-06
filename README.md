@@ -1,2 +1,41 @@
-# Link-Checker
-**Simple terminal-based Python link checker.** A lightweight CLI tool to check whether a link is alive or not. It quickly verifies URL availability and returns a clear result (active or dead), without extra features or complexity. Perfect for quick checks directly from your terminal.
+# Link Check
+
+Simple cyber-style terminal URL risk analyzer.
+
+By Adam: https://github.com/adamarsyadfaizin
+
+## Quick Run
+
+```powershell
+python run.py
+```
+
+You will get a colored terminal menu. Choose:
+
+```text
+1. Link checker
+0. Exit
+```
+
+Inside link checker mode:
+
+```text
+check https://google.com
+explain https://goggle.com
+back
+exit
+```
+
+## Direct CLI
+
+```powershell
+python -m link_check.main https://google.com
+python -m link_check.main explain https://goggle.com
+```
+
+After local install:
+
+```powershell
+pip install .
+link-check https://google.com
+```

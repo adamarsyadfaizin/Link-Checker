@@ -4,23 +4,41 @@ try:
     from colorama import Fore, Style, init
 except ImportError:
     class _EmptyColor:
-        RED = ""
-        YELLOW = ""
-        GREEN = ""
-        CYAN = ""
-        RESET_ALL = ""
+        BLACK = "\033[30m"
+        BLUE = "\033[34m"
+        RED = "\033[31m"
+        YELLOW = "\033[33m"
+        GREEN = "\033[32m"
+        CYAN = "\033[36m"
+        MAGENTA = "\033[35m"
+        WHITE = "\033[37m"
+        BRIGHT = "\033[1m"
+        DIM = "\033[2m"
+        NORMAL = "\033[22m"
+        RESET_ALL = "\033[0m"
 
     Fore = _EmptyColor()
     Style = _EmptyColor()
 
-    def init():
+    def init(autoreset=False):
         return None
 
 from .analyzer import analyze_url
 
 
+CYAN = Fore.CYAN
+GREEN = Fore.GREEN
+MAGENTA = Fore.MAGENTA
+RED = Fore.RED
+YELLOW = Fore.YELLOW
+WHITE = Fore.WHITE
+BRIGHT = Style.BRIGHT
+DIM = Style.DIM
+RESET = Style.RESET_ALL
+
+
 def _usage():
-    return "Usage:\n  link-check <url>\n  link-check explain <url>"
+    return "Usage:\n  link-check <url>\n  link-check explain <url>\n  python run.py"
 
 
 def _parse_args(argv):
@@ -35,10 +53,35 @@ def _parse_args(argv):
 
 def _advice(score):
     if score > 70:
-        return f"{Fore.RED}Advice: DO NOT enter credentials ❌{Style.RESET_ALL}"
+        return f"{RED}{BRIGHT}Advice: DO NOT enter credentials [DANGER]{RESET}"
     if score > 40:
-        return f"{Fore.YELLOW}Advice: Be cautious ⚠{Style.RESET_ALL}"
-    return f"{Fore.GREEN}Advice: Looks safe ✅{Style.RESET_ALL}"
+        return f"{YELLOW}{BRIGHT}Advice: Be cautious [WARNING]{RESET}"
+    return f"{GREEN}{BRIGHT}Advice: Looks safe [OK]{RESET}"
+
+
+def _risk_style(score):
+    if score > 70:
+        return RED, "CRITICAL"
+    if score > 40:
+        return YELLOW, "ELEVATED"
+    return GREEN, "LOW"
+
+
+def _score_bar(score, width=24):
+    filled = round((score / 100) * width)
+    empty = width - filled
+    color, label = _risk_style(score)
+    return f"{color}{'#' * filled}{DIM}{'-' * empty}{RESET} {color}{label}{RESET}"
+
+
+def _signal_color(reason):
+    if reason == "No obvious issues detected":
+        return GREEN
+    if reason.startswith("Looks like impersonation of") or reason.startswith("Very new domain"):
+        return RED
+    if reason.startswith("Suspicious TLD") or reason == "Multiple redirects detected":
+        return YELLOW
+    return MAGENTA
 
 
 def _explain_reason(reason):
@@ -72,8 +115,37 @@ def _explain_reason(reason):
     return "No extra explanation is available for this signal."
 
 
+def print_result(url, detailed=False):
+    result = analyze_url(url)
+    score = result["score"]
+    score_color, _label = _risk_style(score)
+
+    print("\n" + f"{CYAN}{BRIGHT}" + "=" * 58 + RESET)
+    print(f"{CYAN}{BRIGHT}:: Link Analysis Result ::{RESET}")
+    print(f"{CYAN}{BRIGHT}" + "=" * 58 + RESET)
+    print(f"{DIM}TARGET{RESET}  {WHITE}{url}{RESET}")
+    print(f"{DIM}DOMAIN{RESET}  {WHITE}{result.get('domain') or 'unknown'}{RESET}")
+    print(f"{DIM}SCORE {RESET}  {score_color}{BRIGHT}{score:>3}/100{RESET}  {_score_bar(score)}")
+
+    print(f"\n{CYAN}{BRIGHT}[ SIGNALS ]{RESET}")
+    for reason in result["reasons"]:
+        color = _signal_color(reason)
+        print(f"{color}> {reason}{RESET}")
+        if detailed:
+            print(f"{DIM}  {_explain_reason(reason)}{RESET}")
+
+    redirect_chain = result.get("redirect_chain", [])
+    if redirect_chain:
+        print(f"\n{CYAN}{BRIGHT}[ REDIRECT TRACE ]{RESET}")
+        for index, redirected_url in enumerate(redirect_chain, 1):
+            print(f"{MAGENTA}{index:02d}{RESET} -> {redirected_url}")
+
+    print(f"\n{_advice(score)}")
+    return result
+
+
 def main(argv=None):
-    init()
+    init(autoreset=False)
     argv = sys.argv if argv is None else argv
     url, detailed = _parse_args(argv)
 
@@ -81,29 +153,7 @@ def main(argv=None):
         print(_usage())
         return 2
 
-    result = analyze_url(url)
-    score = result["score"]
-
-    print("\n" + "=" * 40)
-    print(f"{Fore.CYAN}🔍 Link Analysis Result{Style.RESET_ALL}")
-    print("=" * 40)
-    print(f"URL: {url}")
-    print(f"Domain: {result.get('domain') or 'unknown'}")
-    print(f"Score: {score}/100")
-
-    print("\nReasons:")
-    for reason in result["reasons"]:
-        print(f"- {reason}")
-        if detailed:
-            print(f"  {_explain_reason(reason)}")
-
-    redirect_chain = result.get("redirect_chain", [])
-    if redirect_chain:
-        print("\nRedirect chain:")
-        for index, redirected_url in enumerate(redirect_chain, 1):
-            print(f"{index}. {redirected_url}")
-
-    print(f"\n{_advice(score)}")
+    print_result(url, detailed=detailed)
     return 0
 
 
