@@ -22,9 +22,12 @@ Inside link checker mode:
 ```text
 check https://google.com
 explain https://goggle.com
+scantext
 back
 exit
 ```
+
+For `scantext`, paste suspicious content and type `END` on a new line.
 
 ## Direct CLI
 

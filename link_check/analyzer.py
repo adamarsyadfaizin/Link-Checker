@@ -151,6 +151,16 @@ def analyze_text(text, source_domain=None):
             35,
         )
 
+    if source_domain and _is_legit_domain(source_domain):
+        for hidden_domain in sorted(set(hidden_domains)):
+            if hidden_domain != source_domain and not hidden_domain.endswith(f".{source_domain}"):
+                _add_signal(
+                    reasons,
+                    seen,
+                    f"Social engineering: trusted page downloads installer from different domain: {hidden_domain}",
+                    30,
+                )
+
     for mention, official_domain in OFFICIAL_MENTIONS.items():
         if mention not in lowered:
             continue
@@ -226,6 +236,7 @@ def analyze_url(url, fetch_content=True):
         reasons.append("Multiple redirects detected")
         score += 15
 
+    decoded_urls = []
     if fetch_content:
         content = fetch_url_text(url)
         if content:
@@ -233,6 +244,7 @@ def analyze_url(url, fetch_content=True):
             if text_result["reasons"]:
                 reasons.extend(text_result["reasons"])
                 score += text_result["score"]
+            decoded_urls = text_result.get("decoded_urls", [])
 
     result = {
         "score": min(score, 100),
@@ -242,5 +254,7 @@ def analyze_url(url, fetch_content=True):
 
     if chain:
         result["redirect_chain"] = chain
+    if decoded_urls:
+        result["decoded_urls"] = decoded_urls
 
     return result

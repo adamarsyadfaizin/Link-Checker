@@ -23,7 +23,7 @@ except ImportError:
     def init(autoreset=False):
         return None
 
-from .analyzer import analyze_url
+from .analyzer import analyze_text, analyze_url
 
 
 CYAN = Fore.CYAN
@@ -77,7 +77,11 @@ def _score_bar(score, width=24):
 def _signal_color(reason):
     if reason == "No obvious issues detected":
         return GREEN
-    if reason.startswith("Looks like impersonation of") or reason.startswith("Very new domain"):
+    if (
+        reason.startswith("Looks like impersonation of")
+        or reason.startswith("Very new domain")
+        or reason.startswith("Social engineering:")
+    ):
         return RED
     if reason.startswith("Suspicious TLD") or reason == "Multiple redirects detected":
         return YELLOW
@@ -110,21 +114,65 @@ def _explain_reason(reason):
             "Several redirects can hide the final destination and are often used "
             "to route users through tracking or evasive infrastructure."
         )
+    if reason.startswith("Social engineering: install command pipes"):
+        return (
+            "Piping curl or wget directly into a shell runs remote code immediately. "
+            "That is one of the highest-risk install patterns."
+        )
+    if reason.startswith("Social engineering: disables TLS verification"):
+        return (
+            "The -k/--insecure flag ignores certificate checks, making it easier "
+            "for attackers or broken infrastructure to serve unsafe code."
+        )
+    if reason.startswith("Social engineering: obfuscated base64"):
+        return (
+            "Base64 can hide the real URL or command from casual inspection. "
+            "Install instructions should not need hidden payloads."
+        )
+    if reason.startswith("Social engineering: command substitution"):
+        return (
+            "Command substitution runs another command first, often hiding the "
+            "actual download location from the visible install snippet."
+        )
+    if reason.startswith("Social engineering: payload URL uses plain HTTP"):
+        return (
+            "Plain HTTP can be modified in transit. Installers should use HTTPS "
+            "from a clearly trusted source."
+        )
+    if reason.startswith("Social engineering: install command downloads"):
+        return (
+            "The visible page may look legitimate, but the command downloads code "
+            "from a different domain that should be treated as untrusted."
+        )
+    if reason.startswith("Social engineering: trusted page downloads"):
+        return (
+            "A legitimate host can still contain unsafe shared content. The page "
+            "domain is trusted, but the installer payload points outside it."
+        )
+    if reason.startswith("Social engineering: mentions"):
+        return (
+            "This is a brand-mismatch signal: the text claims one trusted service, "
+            "but the executable payload points somewhere else."
+        )
+    if reason.startswith("Social engineering: reassuring language"):
+        return (
+            "Attackers often pair high-risk commands with calming safety claims. "
+            "The command behavior matters more than the reassurance."
+        )
     if reason == "Could not extract domain":
         return "The URL could not be parsed into a registered domain for reliable checks."
     return "No extra explanation is available for this signal."
 
 
-def print_result(url, detailed=False):
-    result = analyze_url(url)
+def _print_analysis_result(target, result, detailed=False, domain=None):
     score = result["score"]
     score_color, _label = _risk_style(score)
 
     print("\n" + f"{CYAN}{BRIGHT}" + "=" * 58 + RESET)
     print(f"{CYAN}{BRIGHT}:: Link Analysis Result ::{RESET}")
     print(f"{CYAN}{BRIGHT}" + "=" * 58 + RESET)
-    print(f"{DIM}TARGET{RESET}  {WHITE}{url}{RESET}")
-    print(f"{DIM}DOMAIN{RESET}  {WHITE}{result.get('domain') or 'unknown'}{RESET}")
+    print(f"{DIM}TARGET{RESET}  {WHITE}{target}{RESET}")
+    print(f"{DIM}DOMAIN{RESET}  {WHITE}{domain or result.get('domain') or 'unknown'}{RESET}")
     print(f"{DIM}SCORE {RESET}  {score_color}{BRIGHT}{score:>3}/100{RESET}  {_score_bar(score)}")
 
     print(f"\n{CYAN}{BRIGHT}[ SIGNALS ]{RESET}")
@@ -140,8 +188,26 @@ def print_result(url, detailed=False):
         for index, redirected_url in enumerate(redirect_chain, 1):
             print(f"{MAGENTA}{index:02d}{RESET} -> {redirected_url}")
 
+    decoded_urls = result.get("decoded_urls", [])
+    if decoded_urls:
+        print(f"\n{CYAN}{BRIGHT}[ DECODED URLS ]{RESET}")
+        for index, decoded_url in enumerate(decoded_urls, 1):
+            print(f"{MAGENTA}{index:02d}{RESET} -> {decoded_url}")
+
     print(f"\n{_advice(score)}")
     return result
+
+
+def print_result(url, detailed=False):
+    result = analyze_url(url)
+    return _print_analysis_result(url, result, detailed=detailed)
+
+
+def print_text_result(text, detailed=True):
+    result = analyze_text(text)
+    if not result["reasons"]:
+        result["reasons"] = ["No obvious issues detected"]
+    return _print_analysis_result("pasted content", result, detailed=detailed, domain="n/a")
 
 
 def main(argv=None):

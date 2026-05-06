@@ -1,4 +1,4 @@
-from link_check.main import print_result
+from link_check.main import print_result, print_text_result
 
 try:
     from colorama import Fore, Style, init
@@ -59,6 +59,7 @@ def _print_link_checker_help():
     print(f"\n{CYAN}{BRIGHT}[ COMMAND DECK ]{RESET}")
     print(f"{GREEN}check <url>{RESET}       Analyze a URL")
     print(f"{MAGENTA}explain <url>{RESET}     Analyze with detailed explanations")
+    print(f"{MAGENTA}scantext{RESET}          Paste suspicious text, then type END")
     print(f"{YELLOW}help{RESET}              Show this help")
     print(f"{YELLOW}back{RESET}              Return to main menu")
     print(f"{RED}exit{RESET}              Close the app")
@@ -86,6 +87,20 @@ def link_checker_loop():
             return "exit"
         if command in ("help", "?"):
             _print_link_checker_help()
+            continue
+        if command == "scantext":
+            print(f"{CYAN}Paste suspicious content below. Type END on its own line to scan.{RESET}")
+            lines = []
+            while True:
+                line = input()
+                if line.strip() == "END":
+                    break
+                lines.append(line)
+            text = "\n".join(lines).strip()
+            if not text:
+                print(f"{YELLOW}No text entered.{RESET}")
+                continue
+            print_text_result(text, detailed=True)
             continue
         if command in ("check", "explain"):
             if not value:
