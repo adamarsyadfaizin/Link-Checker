@@ -107,14 +107,47 @@ def check_redirect(url):
         return False, []
 
 
-def fetch_url_text(url, max_chars=300000):
+def _browser_headers():
+    return {
+        "Accept": "text/html,application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+    }
+
+
+def _claude_share_api_url(url):
+    parsed = urlparse(_ensure_scheme(url))
+    if parsed.netloc.lower() != "claude.ai":
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) >= 2 and parts[0].lower() == "share":
+        return f"https://claude.ai/api/share/{parts[1]}"
+
+    return None
+
+
+def _candidate_content_urls(url):
+    normalized_url = _ensure_scheme(url)
+    candidates = [normalized_url]
+    claude_api_url = _claude_share_api_url(normalized_url)
+    if claude_api_url:
+        candidates.insert(0, claude_api_url)
+    return candidates
+
+
+def _fetch_text_once(url, max_chars=300000):
     try:
         if requests is not None:
             response = requests.get(
-                _ensure_scheme(url),
+                url,
                 timeout=8,
                 allow_redirects=True,
-                headers={"User-Agent": "link-check/0.1"},
+                headers=_browser_headers(),
             )
             content_type = response.headers.get("content-type", "").lower()
             if content_type and not any(
@@ -125,8 +158,8 @@ def fetch_url_text(url, max_chars=300000):
             return response.text[:max_chars]
 
         request = Request(
-            _ensure_scheme(url),
-            headers={"User-Agent": "link-check/0.1"},
+            url,
+            headers=_browser_headers(),
         )
         with urlopen(request, timeout=8) as response:
             content_type = response.headers.get("content-type", "").lower()
@@ -141,3 +174,15 @@ def fetch_url_text(url, max_chars=300000):
         return data.decode(charset, errors="replace")
     except Exception:
         return None
+
+
+def fetch_url_text(url, max_chars=300000):
+    texts = []
+    for candidate_url in _candidate_content_urls(url):
+        text = _fetch_text_once(candidate_url, max_chars=max_chars)
+        if text:
+            texts.append(text)
+
+    if texts:
+        return "\n".join(texts)[:max_chars]
+    return None

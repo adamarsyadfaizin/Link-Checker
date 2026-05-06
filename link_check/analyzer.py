@@ -1,5 +1,7 @@
 import base64
 import binascii
+import html
+import json
 import re
 from urllib.parse import parse_qs, urlparse
 
@@ -30,10 +32,28 @@ LEGIT_DOMAINS = [
 
 RISKY_KEYWORDS = ["free", "login", "secure", "bonus", "verify"]
 RISKY_TLDS = [".top", ".xyz", ".click", ".buzz"]
+RISKY_URL_TERMS = {
+    "phishing": 60,
+    "malware": 60,
+    "ransomware": 60,
+    "credential": 35,
+    "credentials": 35,
+    "password": 30,
+    "signin": 20,
+    "sign-in": 20,
+    "verify-account": 25,
+}
+KNOWN_TEST_THREAT_HOSTS = {
+    "testsafebrowsing.appspot.com": "Google Safe Browsing test threat URL",
+}
 URL_PATTERN = re.compile(r"https?://[^\s'\"<>|)]+", re.IGNORECASE)
 BASE64_PATTERN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/=])")
 PIPE_TO_SHELL_PATTERN = re.compile(
     r"\b(curl|wget)\b[\s\S]{0,240}\|[\s\S]{0,80}\b(sh|bash|zsh|fish|python|perl|ruby)\b",
+    re.IGNORECASE,
+)
+POWERSHELL_PIPE_EXEC_PATTERN = re.compile(
+    r"\b(irm|iwr|invoke-webrequest)\b[\s\S]{0,240}\|[\s\S]{0,80}\b(iex|invoke-expression)\b",
     re.IGNORECASE,
 )
 COMMAND_SUBSTITUTION_PATTERN = re.compile(r"\$\([^)]+\)", re.IGNORECASE)
@@ -60,6 +80,12 @@ TRACKING_PARAMS = {
     "utm_medium",
     "utm_source",
 }
+TRUSTED_INSTALLER_URLS = {
+    "https://claude.ai/install.sh",
+    "https://claude.ai/install.ps1",
+    "https://raw.githubusercontent.com/nvm-sh/nvm/",
+}
+OFFICIAL_INSTALLER_SIGNAL = "Official installer command from trusted domain"
 
 
 def check_similarity(domain):
@@ -99,8 +125,57 @@ def _extract_urls(text):
     return [url.rstrip(".,;]") for url in URL_PATTERN.findall(text or "")]
 
 
+def _collect_json_strings(value):
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        strings = []
+        for item in value.values():
+            strings.extend(_collect_json_strings(item))
+        return strings
+    if isinstance(value, list):
+        strings = []
+        for item in value:
+            strings.extend(_collect_json_strings(item))
+        return strings
+    return []
+
+
+def _expand_text_for_analysis(text):
+    variants = [text or ""]
+    unescaped = html.unescape(text or "")
+    if unescaped not in variants:
+        variants.append(unescaped)
+
+    for candidate in list(variants):
+        try:
+            parsed = json.loads(candidate)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        json_text = "\n".join(_collect_json_strings(parsed))
+        if json_text and json_text not in variants:
+            variants.append(json_text)
+
+    return "\n".join(variants)
+
+
 def _is_legit_domain(domain):
     return domain in LEGIT_DOMAINS or any(domain.endswith(f".{legit}") for legit in LEGIT_DOMAINS)
+
+
+def _is_trusted_installer_url(url):
+    normalized = (url or "").rstrip("/")
+    return any(
+        normalized == trusted.rstrip("/") or normalized.startswith(trusted)
+        for trusted in TRUSTED_INSTALLER_URLS
+    )
+
+
+def _has_pipe_to_shell(text):
+    return bool(
+        PIPE_TO_SHELL_PATTERN.search(text or "")
+        or POWERSHELL_PIPE_EXEC_PATTERN.search(text or "")
+    )
 
 
 def _is_user_generated_share_url(url, domain):
@@ -116,23 +191,67 @@ def _has_tracking_params(url):
     return bool(params & TRACKING_PARAMS)
 
 
+def _extract_host(url):
+    parsed = urlparse(url if "://" in (url or "") else f"https://{url}")
+    return (parsed.netloc or parsed.path).split("@")[-1].split(":")[0].lower()
+
+
+def _url_surface_signals(url):
+    signals = []
+    seen = set()
+    parsed = urlparse(url if "://" in (url or "") else f"https://{url}")
+    host = _extract_host(url)
+    surface = f"{parsed.path} {parsed.query}".lower()
+
+    if parsed.scheme == "http":
+        _add_signal(signals, seen, "Uses plain HTTP instead of HTTPS", 10)
+
+    if host in KNOWN_TEST_THREAT_HOSTS:
+        _add_signal(signals, seen, KNOWN_TEST_THREAT_HOSTS[host], 90)
+
+    for term, term_score in RISKY_URL_TERMS.items():
+        if term in surface:
+            _add_signal(signals, seen, f'URL path/query contains threat term: "{term}"', term_score)
+
+    return signals
+
+
 def analyze_text(text, source_domain=None):
     reasons = []
     seen = set()
-    text = text or ""
+    text = _expand_text_for_analysis(text)
     lowered = text.lower()
     decoded_values = _decoded_base64_values(text)
     decoded_text = "\n".join(decoded_values)
     combined = f"{text}\n{decoded_text}"
     combined_lowered = combined.lower()
+    urls = _extract_urls(combined)
+    installer_domains = []
+    untrusted_installer_domains = []
+    trusted_installer_seen = False
 
-    if PIPE_TO_SHELL_PATTERN.search(combined):
+    for found_url in urls:
+        found_domain = extract_domain(found_url)
+        if not found_domain:
+            continue
+        if any(tool in combined_lowered for tool in ("curl", "wget", "irm", "iwr", "invoke-webrequest")):
+            installer_domains.append(found_domain)
+            if _is_trusted_installer_url(found_url):
+                trusted_installer_seen = True
+            elif not _is_legit_domain(found_domain):
+                untrusted_installer_domains.append(found_domain)
+
+    has_pipe_execution = _has_pipe_to_shell(combined)
+
+    if has_pipe_execution and not trusted_installer_seen:
         _add_signal(
             reasons,
             seen,
             "Social engineering: install command pipes remote script into shell",
             45,
         )
+    elif has_pipe_execution and trusted_installer_seen:
+        _add_signal(reasons, seen, OFFICIAL_INSTALLER_SIGNAL, 0)
 
     if re.search(r"\bcurl\b[^\n|;]*\s(-k|--insecure)\b", combined, re.IGNORECASE):
         _add_signal(
@@ -158,8 +277,6 @@ def analyze_text(text, source_domain=None):
             20,
         )
 
-    urls = _extract_urls(combined)
-    hidden_domains = []
     for found_url in urls:
         found_domain = extract_domain(found_url)
         if not found_domain:
@@ -171,8 +288,7 @@ def analyze_text(text, source_domain=None):
                 f"Social engineering: payload URL uses plain HTTP: {found_domain}",
                 25,
             )
-        if any(tool in combined_lowered for tool in ("curl", "wget")) and not _is_legit_domain(found_domain):
-            hidden_domains.append(found_domain)
+    hidden_domains = untrusted_installer_domains
 
     for hidden_domain in sorted(set(hidden_domains)):
         _add_signal(
@@ -212,7 +328,7 @@ def analyze_text(text, source_domain=None):
         "copy the command",
     )
     if any(phrase in lowered for phrase in trust_phrases) and (
-        PIPE_TO_SHELL_PATTERN.search(combined) or decoded_values
+        (has_pipe_execution and not trusted_installer_seen) or decoded_values
     ):
         _add_signal(
             reasons,
@@ -230,9 +346,14 @@ def analyze_text(text, source_domain=None):
 
 def analyze_url(url, fetch_content=True):
     domain = extract_domain(url)
+    host = _extract_host(url)
 
     reasons = []
     score = 0
+
+    for reason, reason_score in _url_surface_signals(url):
+        reasons.append(reason)
+        score += reason_score
 
     if not domain:
         reasons.append("Could not extract domain")
@@ -290,6 +411,7 @@ def analyze_url(url, fetch_content=True):
         "score": min(score, 100),
         "reasons": reasons if reasons else ["No obvious issues detected"],
         "domain": domain,
+        "host": host,
     }
 
     if chain:

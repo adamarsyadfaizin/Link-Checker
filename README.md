@@ -27,7 +27,11 @@ back
 exit
 ```
 
-For `scantext`, paste suspicious content and type `END` on a new line.
+`check` automatically tries to inspect supported shared-page APIs such as
+`claude.ai/api/share/<id>` so social-engineering content can be detected from the URL.
+It also checks the full URL path/query for threat terms such as `phishing`,
+`malware`, and `credential`, plus known Google Safe Browsing test URLs.
+For `scantext`, paste suspicious local content and type `END` on a new line.
 
 ## Direct CLI
 

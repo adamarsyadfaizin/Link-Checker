@@ -77,15 +77,20 @@ def _score_bar(score, width=24):
 def _signal_color(reason):
     if reason == "No obvious issues detected":
         return GREEN
+    if reason == "Official installer command from trusted domain":
+        return GREEN
     if (
         reason.startswith("Looks like impersonation of")
         or reason.startswith("Very new domain")
         or reason.startswith("Social engineering:")
+        or reason == "Google Safe Browsing test threat URL"
+        or reason.startswith("URL path/query contains threat term")
     ):
         return RED
     if (
         reason.startswith("Suspicious TLD")
         or reason == "Multiple redirects detected"
+        or reason == "Uses plain HTTP instead of HTTPS"
         or reason.startswith("Content scan unavailable")
         or reason == "Shared link includes ad/tracking parameters"
     ):
@@ -169,6 +174,26 @@ def _explain_reason(reason):
             "This is a user-shared page from a trusted platform. The domain is legitimate, "
             "but the tool could not inspect the shared content, so it cannot clear it as safe."
         )
+    if reason == "Official installer command from trusted domain":
+        return (
+            "The command uses a known official installer URL. Piping installers into a shell "
+            "still deserves care, but this specific source is trusted by the rule set."
+        )
+    if reason == "Google Safe Browsing test threat URL":
+        return (
+            "This host is used by Google Safe Browsing for test threat pages. "
+            "It should be treated as a deliberate phishing/malware test signal."
+        )
+    if reason.startswith("URL path/query contains threat term"):
+        return (
+            "The risky signal is in the URL path or query, not the registered domain. "
+            "Phishing links often hide the intent after an otherwise normal host."
+        )
+    if reason == "Uses plain HTTP instead of HTTPS":
+        return (
+            "Plain HTTP is not encrypted. It is especially concerning when combined "
+            "with login, credential, phishing, or installer-related signals."
+        )
     if reason == "Shared link includes ad/tracking parameters":
         return (
             "Tracking parameters do not prove danger, but they are common in promoted links "
@@ -187,6 +212,8 @@ def _print_analysis_result(target, result, detailed=False, domain=None):
     print(f"{CYAN}{BRIGHT}:: Link Analysis Result ::{RESET}")
     print(f"{CYAN}{BRIGHT}" + "=" * 58 + RESET)
     print(f"{DIM}TARGET{RESET}  {WHITE}{target}{RESET}")
+    if result.get("host"):
+        print(f"{DIM}HOST  {RESET}  {WHITE}{result.get('host')}{RESET}")
     print(f"{DIM}DOMAIN{RESET}  {WHITE}{domain or result.get('domain') or 'unknown'}{RESET}")
     print(f"{DIM}SCORE {RESET}  {score_color}{BRIGHT}{score:>3}/100{RESET}  {_score_bar(score)}")
 
